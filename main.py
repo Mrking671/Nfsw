@@ -1,57 +1,71 @@
-import requests
-import logging
 from flask import Flask, request
-import telebot
+import requests
+import os
 
-# Initialize Flask and TeleBot
 app = Flask(__name__)
-TOKEN = '7011638444:AAGqffTejoqZ8hegXPAsf_ddWJNtrYWfzsY'
-bot = telebot.TeleBot(TOKEN)
 
-API_URL = 'https://img-api.ashlynn.workers.dev/?prompt={}'
+# Your bot token from Telegram
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Store your bot token in environment variables for security
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# API endpoint to get images based on user prompts
+API_URL = "https://img-api.ashlynn.workers.dev/?prompt="
 
-# Function to fetch images from the API
-def fetch_images_from_api(prompt):
-    url = API_URL.format(prompt)
-    logging.info(f"Sending request to API: {url}")
-    
-    try:
-        response = requests.get(url)
-        logging.info(f"API Response: {response.text}")  # Log the raw API response
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data['image_urls']  # Return list of image URLs
-    except Exception as e:
-        logging.error(f"Error fetching from API: {e}")
-    
-    return None
+# Route to set the webhook for Telegram
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    webhook_url = f"{request.host_url}webhook"  # Your deployed server's webhook URL
+    set_webhook_url = f'https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={webhook_url}'
+    response = requests.get(set_webhook_url)
+    return response.json()
 
-# Telegram webhook endpoint
+# Webhook route for handling incoming updates from Telegram
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.json
-    logging.info(f"Received data from Telegram: {data}")
-    
-    if "message" in data:
-        chat_id = data['message']['chat']['id']
-        text = data['message'].get('text', '')
+    if request.method == 'POST':
+        # Get the incoming update (JSON format)
+        update = request.get_json()
+        
+        # Extract message details
+        message = update.get('message')
+        if message:
+            chat_id = message['chat']['id']
+            text = message.get('text')
 
-        if text:
-            image_urls = fetch_images_from_api(text)
-            if image_urls:
-                for img_url in image_urls:
-                    logging.info(f"Sending image: {img_url}")
-                    bot.send_photo(chat_id=chat_id, photo=img_url)
-            else:
-                bot.send_message(chat_id=chat_id, text="Sorry, I couldn't find any images.")
-    return "OK", 200
+            if text:
+                # Call the API with the user's prompt
+                api_response = requests.get(API_URL + text).json()
 
-# Set webhook
+                # Extract image URLs from the API response
+                image_urls = api_response.get('image_urls', [])
+                
+                # Send each image back to the user
+                for image_url in image_urls:
+                    send_photo(chat_id, image_url)
+                    
+                # Optionally send the join message if provided in the API response
+                join_message = api_response.get('join')
+                if join_message:
+                    send_message(chat_id, join_message)
+
+        return "ok", 200
+
+# Function to send a message via Telegram bot
+def send_message(chat_id, text):
+    send_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+    requests.post(send_url, json=payload)
+
+# Function to send a photo via Telegram bot
+def send_photo(chat_id, photo_url):
+    send_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    payload = {
+        "chat_id": chat_id,
+        "photo": photo_url
+    }
+    requests.post(send_url, json=payload)
+
 if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.set_webhook(url="https://nfsw.onrender.com/webhook")
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
